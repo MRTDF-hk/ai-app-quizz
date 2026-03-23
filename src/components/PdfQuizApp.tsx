@@ -12,10 +12,15 @@ function classNames(...items: Array<string | false | null | undefined>) {
 export default function PdfQuizApp() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Vercel are limite mai mici pentru request body (de regulă câțiva MB).
+  // Setăm o limită conservatoare ca să nu primești pagină HTML (ex: 413).
+  const MAX_UPLOAD_BYTES = 4 * 1024 * 1024; // 4MB
+
   const [phase, setPhase] = useState<UploadPhase>("idle");
   const [uploadProgress, setUploadProgress] = useState(0);
   const [fileName, setFileName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isFileValid, setIsFileValid] = useState(true);
 
   const [showRequirementsEditor, setShowRequirementsEditor] = useState(false);
   const [requirementsText, setRequirementsText] = useState("");
@@ -38,6 +43,7 @@ export default function PdfQuizApp() {
   // iar valoarea va fi citită corect din ref în timpul renderului.
   const canGenerate =
     Boolean(fileRef.current) &&
+    isFileValid &&
     !busy &&
     phase !== "uploading" &&
     phase !== "processing";
@@ -46,6 +52,12 @@ export default function PdfQuizApp() {
     const file = fileRef.current;
     if (!file) {
       setError("Selectează mai întâi un fișier PDF.");
+      setPhase("error");
+      return;
+    }
+
+    if (!isFileValid) {
+      setError("Fișier prea mare. Redu dimensiunea și reîncearcă.");
       setPhase("error");
       return;
     }
@@ -150,9 +162,18 @@ export default function PdfQuizApp() {
     fileRef.current = file;
     setFileName(file.name);
 
+    const valid = file.size <= MAX_UPLOAD_BYTES;
+    setIsFileValid(valid);
+    if (!valid) {
+      setError("Fișier prea mare pentru Vercel. Limita este 4MB.");
+      setPhase("error");
+    } else {
+      setPhase("idle");
+    }
+
     // Reset state when user picks a new file.
     setQuiz(null);
-    setPhase("idle");
+    // setPhase("idle") de mai sus (în funcție de validare)
     setUploadProgress(0);
     setQuestionIndex(0);
     setSelectedOption(null);
@@ -270,7 +291,7 @@ export default function PdfQuizApp() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-medium text-zinc-200">1) Încarcă un PDF</p>
-                  <p className="mt-1 text-xs text-zinc-400">Suport: max 10MB</p>
+                  <p className="mt-1 text-xs text-zinc-400">Suport: max 4MB (Vercel)</p>
                 </div>
                 <button
                   type="button"
