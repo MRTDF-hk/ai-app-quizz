@@ -22,6 +22,9 @@ export async function extractPdfText(
 
     if (normalized.length <= maxChars) return normalized;
     return normalized.slice(0, maxChars);
+  } catch (error) {
+    console.error("PDF extraction error:", error);
+    throw new Error("Nu am putut citi PDF-ul (sau este corupt).");
   } finally {
     await parser.destroy();
   }

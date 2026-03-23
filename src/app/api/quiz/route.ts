@@ -132,7 +132,8 @@ export async function POST(req: Request) {
     let extractedText: string;
     try {
       extractedText = await extractPdfText(buf, { maxChars: 12000 });
-    } catch {
+    } catch (error) {
+      console.error("PDF extraction error:", error);
       return errorResponse("Nu am putut citi PDF-ul (sau este corupt).", 400);
     }
 
