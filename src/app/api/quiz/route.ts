@@ -11,6 +11,7 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10MB
+const MAX_INSTRUCTIONS_CHARS = 1400;
 
 function sha256(buf: Buffer) {
   return createHash("sha256").update(buf).digest("hex");
@@ -38,6 +39,7 @@ export async function POST(req: Request) {
     const file = formData.get("file");
     const regenerateRaw = formData.get("regenerate");
     const questionCountRaw = formData.get("questionCount");
+    const instructionsRaw = formData.get("instructions");
 
     if (!isUploadFileLike(file)) {
       return errorResponse("Nu a fost trimis niciun fișier.", 400);
@@ -65,7 +67,16 @@ export async function POST(req: Request) {
     if (!looksLikePdf) return errorResponse("Fișier invalid. Trimite un PDF.", 400);
 
     const pdfSha = sha256(buf);
-    const cacheKey = `${pdfSha}:q${questionCount}`;
+    const instructionsText =
+      typeof instructionsRaw === "string" ? instructionsRaw.trim() : "";
+    const finalInstructionsText =
+      instructionsText.length > MAX_INSTRUCTIONS_CHARS
+        ? instructionsText.slice(0, MAX_INSTRUCTIONS_CHARS)
+        : instructionsText;
+    const instructionsSha = finalInstructionsText
+      ? sha256(Buffer.from(finalInstructionsText, "utf8"))
+      : "none";
+    const cacheKey = `${pdfSha}:q${questionCount}:i${instructionsSha}`;
 
     if (!regenerate) {
       const cached = getCachedQuiz(cacheKey);
@@ -87,7 +98,11 @@ export async function POST(req: Request) {
 
     const quizPayload: QuizPayload = await generateQuizFromExtractedText(
       extractedText,
-      { questionCount, maxRetries: 2 },
+      {
+        questionCount,
+        maxRetries: 2,
+        additionalInstructions: finalInstructionsText || undefined,
+      },
     );
 
     setCachedQuiz(cacheKey, pdfSha, quizPayload);

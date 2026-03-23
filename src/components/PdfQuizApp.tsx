@@ -17,6 +17,9 @@ export default function PdfQuizApp() {
   const [fileName, setFileName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [showRequirementsEditor, setShowRequirementsEditor] = useState(false);
+  const [requirementsText, setRequirementsText] = useState("");
+
   const [quiz, setQuiz] = useState<QuizQuestion[] | null>(null);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
@@ -63,6 +66,9 @@ export default function PdfQuizApp() {
       formData.append("file", file);
       formData.append("regenerate", regenerate ? "1" : "0");
       formData.append("questionCount", "5");
+      if (requirementsText.trim().length > 0) {
+        formData.append("instructions", requirementsText.trim());
+      }
 
       const result = await new Promise<QuizPayload & { cached?: boolean }>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
@@ -77,12 +83,33 @@ export default function PdfQuizApp() {
         xhr.onload = () => {
           try {
             const statusOk = xhr.status >= 200 && xhr.status < 300;
-            const parsed = xhr.responseText ? JSON.parse(xhr.responseText) : {};
+            const rawText = xhr.responseText ?? "";
+            let parsed: Record<string, unknown> = {};
+
+            if (rawText.trim().length > 0) {
+              try {
+                parsed = JSON.parse(rawText) as Record<string, unknown>;
+              } catch {
+                // Backend-ul ar trebui să returneze JSON, dar la unele erori Next poate trimite HTML.
+                // Afișăm textul primit ca să vezi motivul real.
+                parsed = { error: rawText.slice(0, 500) };
+              }
+            }
+
             if (!statusOk) {
-              reject(new Error(parsed?.error || "Eroare la generare quiz."));
+              const errMsg =
+                typeof parsed.error === "string" ? parsed.error : "Eroare la generare quiz.";
+              reject(new Error(errMsg));
               return;
             }
-            resolve(parsed);
+            // Dacă status e ok, dar tot nu avem structura dorită, tratăm ca eroare.
+            const maybeQuiz = parsed["quiz"];
+            if (!Array.isArray(maybeQuiz)) {
+              reject(new Error("Răspuns invalid de la server."));
+              return;
+            }
+
+            resolve(parsed as QuizPayload & { cached?: boolean });
           } catch {
             reject(new Error("Răspuns invalid de la server.")); // should be rare
           }
@@ -327,14 +354,51 @@ export default function PdfQuizApp() {
                   </p>
                   <div className="grid grid-cols-2 gap-3 pt-3">
                     <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-                      <div className="text-xs text-zinc-400">Cerințe</div>
-                      <div className="mt-1 text-sm font-semibold">minim 5 întrebări</div>
+                      <button
+                        type="button"
+                        onClick={() => setShowRequirementsEditor((v) => !v)}
+                        className="w-full text-left"
+                      >
+                        <div className="text-xs text-zinc-400">Cerințe</div>
+                        <div className="mt-1 text-sm font-semibold">
+                          minim 5 întrebări
+                          <span className="ml-1 text-xs font-medium text-zinc-400">
+                            {showRequirementsEditor ? "— ascunde" : "— editează"}
+                          </span>
+                        </div>
+                      </button>
                     </div>
                     <div className="rounded-xl border border-white/10 bg-black/20 p-3">
                       <div className="text-xs text-zinc-400">Limbă</div>
                       <div className="mt-1 text-sm font-semibold">română (UI + quiz)</div>
                     </div>
                   </div>
+
+                  {showRequirementsEditor ? (
+                    <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                      <div className="text-xs text-zinc-400">Instrucțiuni suplimentare (opțional)</div>
+                      <textarea
+                        value={requirementsText}
+                        onChange={(e) => setRequirementsText(e.target.value)}
+                        rows={4}
+                        placeholder="Ex: Creează întrebări de nivel mediu. Fă 2 întrebări despre definții și 3 despre aplicații. Evită întrebări foarte lungi."
+                        className="mt-2 w-full resize-none rounded-lg border border-white/10 bg-black/40 p-3 text-sm text-zinc-100 outline-none focus:border-emerald-400"
+                      />
+                      <div className="mt-2 flex items-center justify-between gap-3">
+                        <p className="text-xs text-zinc-400">
+                          Aceste instrucțiuni vor fi trimise la AI.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setRequirementsText("")}
+                          disabled={requirementsText.trim().length === 0}
+                          className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-zinc-100 transition hover:bg-white/10 disabled:opacity-50"
+                        >
+                          Curăță
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 

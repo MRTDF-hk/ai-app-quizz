@@ -63,10 +63,16 @@ export async function generateQuizFromExtractedText(
   opts?: {
     questionCount?: number;
     maxRetries?: number;
+    additionalInstructions?: string;
   },
 ) {
   const questionCount = opts?.questionCount ?? 5;
   const maxRetries = opts?.maxRetries ?? 2;
+  const additionalInstructions = opts?.additionalInstructions?.trim();
+  const finalAdditionalInstructions =
+    additionalInstructions && additionalInstructions.length > 1200
+      ? additionalInstructions.slice(0, 1200)
+      : additionalInstructions;
 
   const apiKey = getOpenRouterApiKey();
   const model = getOpenRouterModel();
@@ -87,6 +93,13 @@ export async function generateQuizFromExtractedText(
       "- `correctAnswer` trebuie să fie EXACT egal cu UNA dintre valorile din `options`.",
       "- O singură opțiune corectă.",
       "",
+      finalAdditionalInstructions
+        ? [
+            "Instrucțiuni suplimentare (urmează-le la maximum, fără a încălca cerințele de JSON și română):",
+            finalAdditionalInstructions,
+            "",
+          ].join("\n")
+        : "",
       "Alege întrebări clare, distincte și corelate cu conținutul.",
       "Dacă textul e insuficient, generează întrebări rezonabile, dar evită afirmații inventate.",
       "",
@@ -111,11 +124,16 @@ export async function generateQuizFromExtractedText(
   };
 
   let lastErr: unknown = null;
+  const TIMEOUT_MS = 35000;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
       const resp = await fetch(OPENROUTER_CHAT_URL, {
         method: "POST",
         headers,
+        signal: controller.signal,
         body: JSON.stringify({
           ...bodyBase,
           messages: [
@@ -125,6 +143,7 @@ export async function generateQuizFromExtractedText(
         }),
       });
 
+      clearTimeout(timeoutId);
       if (!resp.ok) {
         const text = await resp.text().catch(() => "");
         throw new Error(`Eșec API AI: HTTP ${resp.status}. ${text}`.trim());
@@ -162,6 +181,9 @@ export async function generateQuizFromExtractedText(
       };
     } catch (err) {
       lastErr = err;
+    } finally {
+      // N-are efect dacă fetch a terminat deja, dar curăță timeout-ul.
+      // (abort controller rămâne local)
     }
   }
 
