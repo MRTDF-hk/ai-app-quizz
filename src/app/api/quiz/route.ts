@@ -35,40 +35,84 @@ function errorResponse(message: string, status = 400) {
 
 export async function POST(req: Request) {
   try {
-    const formData = await req.formData();
-    const file = formData.get("file");
-    const regenerateRaw = formData.get("regenerate");
-    const questionCountRaw = formData.get("questionCount");
-    const instructionsRaw = formData.get("instructions");
+    const contentType = req.headers.get("content-type") || "";
 
-    if (!isUploadFileLike(file)) {
-      return errorResponse("Nu a fost trimis niciun fișier.", 400);
+    let regenerate = false;
+    let questionCount = 5;
+    let instructionsText = "";
+    let buf: Buffer | null = null;
+    let mime = "application/pdf";
+    let name = "fișier";
+
+    if (contentType.includes("application/json")) {
+      const body = (await req.json()) as {
+        url?: string;
+        regenerate?: boolean;
+        questionCount?: number;
+        instructions?: string;
+        fileName?: string;
+      };
+
+      if (!body.url || typeof body.url !== "string") {
+        return errorResponse("Nu a fost trimis niciun URL pentru PDF.", 400);
+      }
+
+      regenerate = Boolean(body.regenerate);
+      questionCount =
+        typeof body.questionCount === "number" && Number.isFinite(body.questionCount)
+          ? Math.max(5, Math.min(15, body.questionCount))
+          : 5;
+
+      instructionsText = typeof body.instructions === "string" ? body.instructions.trim() : "";
+
+      const pdfRes = await fetch(body.url);
+      if (!pdfRes.ok) {
+        return errorResponse("Nu am putut descărca PDF-ul din Blob.", 400);
+      }
+
+      const arrayBuffer = await pdfRes.arrayBuffer();
+      buf = Buffer.from(arrayBuffer);
+      name = body.fileName || name;
+      mime = "application/pdf";
+    } else {
+      const formData = await req.formData();
+      const file = formData.get("file");
+      const regenerateRaw = formData.get("regenerate");
+      const questionCountRaw = formData.get("questionCount");
+      const instructionsRaw = formData.get("instructions");
+
+      if (!isUploadFileLike(file)) {
+        return errorResponse("Nu a fost trimis niciun fișier.", 400);
+      }
+
+      regenerate =
+        typeof regenerateRaw === "string" &&
+        (regenerateRaw === "1" || regenerateRaw.toLowerCase() === "true");
+
+      questionCount =
+        typeof questionCountRaw === "string" && Number.isFinite(Number(questionCountRaw))
+          ? Math.max(5, Math.min(15, Number(questionCountRaw)))
+          : 5;
+
+      instructionsText = typeof instructionsRaw === "string" ? instructionsRaw.trim() : "";
+
+      const arrayBuffer = await file.arrayBuffer();
+      buf = Buffer.from(arrayBuffer);
+      mime = file.type || mime;
+      name = file.name || name;
     }
 
-    const regenerate =
-      typeof regenerateRaw === "string" && (regenerateRaw === "1" || regenerateRaw.toLowerCase() === "true");
-
-    const questionCount =
-      typeof questionCountRaw === "string" && Number.isFinite(Number(questionCountRaw))
-        ? Math.max(5, Math.min(15, Number(questionCountRaw)))
-        : 5;
-
-    const arrayBuffer = await file.arrayBuffer();
-    const buf = Buffer.from(arrayBuffer);
+    if (!buf) return errorResponse("Fișier/URL invalid.", 400);
 
     if (buf.byteLength === 0) return errorResponse("Fișierul este gol.", 400);
     if (buf.byteLength > MAX_FILE_BYTES) {
       return errorResponse("Fișier prea mare. Limita este 10MB.", 400);
     }
 
-    const mime = file.type || "";
-    const name = file.name || "fișier";
     const looksLikePdf = mime === "application/pdf" || name.toLowerCase().endsWith(".pdf");
     if (!looksLikePdf) return errorResponse("Fișier invalid. Trimite un PDF.", 400);
 
     const pdfSha = sha256(buf);
-    const instructionsText =
-      typeof instructionsRaw === "string" ? instructionsRaw.trim() : "";
     const finalInstructionsText =
       instructionsText.length > MAX_INSTRUCTIONS_CHARS
         ? instructionsText.slice(0, MAX_INSTRUCTIONS_CHARS)

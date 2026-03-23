@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useRef, useState } from "react";
+import { upload } from "@vercel/blob/client";
 import type { QuizPayload, QuizQuestion } from "@/lib/quiz/types";
 
 type UploadPhase = "idle" | "uploading" | "processing" | "ready" | "finished" | "error";
@@ -12,15 +13,12 @@ function classNames(...items: Array<string | false | null | undefined>) {
 export default function PdfQuizApp() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Vercel are limite mai mici pentru request body (de regulă câțiva MB).
-  // Setăm o limită conservatoare ca să nu primești pagină HTML (ex: 413).
-  const MAX_UPLOAD_BYTES = 4 * 1024 * 1024; // 4MB
+  const MAX_FORMDATA_UPLOAD_BYTES = 4 * 1024 * 1024; // 4MB (când folosim multipart/form-data)
 
   const [phase, setPhase] = useState<UploadPhase>("idle");
   const [uploadProgress, setUploadProgress] = useState(0);
   const [fileName, setFileName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isFileValid, setIsFileValid] = useState(true);
 
   const [showRequirementsEditor, setShowRequirementsEditor] = useState(false);
   const [requirementsText, setRequirementsText] = useState("");
@@ -43,7 +41,6 @@ export default function PdfQuizApp() {
   // iar valoarea va fi citită corect din ref în timpul renderului.
   const canGenerate =
     Boolean(fileRef.current) &&
-    isFileValid &&
     !busy &&
     phase !== "uploading" &&
     phase !== "processing";
@@ -56,15 +53,8 @@ export default function PdfQuizApp() {
       return;
     }
 
-    if (!isFileValid) {
-      setError("Fișier prea mare. Redu dimensiunea și reîncearcă.");
-      setPhase("error");
-      return;
-    }
-
     setError(null);
     setPhase("uploading");
-    setUploadProgress(0);
     setBusy(true);
     setQuiz(null);
     setQuestionIndex(0);
@@ -74,12 +64,77 @@ export default function PdfQuizApp() {
     setScore(0);
 
     try {
+      const questionCount = 5;
+      const instructionsTrimmed = requirementsText.trim();
+
+      // Pentru fișiere mai mari, folosim Vercel Blob (evită limitele de multipart/form-data).
+      if (file.size > MAX_FORMDATA_UPLOAD_BYTES) {
+        setUploadProgress(15);
+        const blob = await upload(file.name, file, {
+          access: "private",
+          handleUploadUrl: "/api/pdf-upload",
+        });
+
+        setUploadProgress(80);
+
+        const res = await fetch("/api/quiz", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: blob.url,
+            fileName: file.name,
+            regenerate,
+            questionCount,
+            instructions: instructionsTrimmed.length > 0 ? instructionsTrimmed : undefined,
+          }),
+        });
+
+        const rawText = await res.text();
+        let parsed: Record<string, unknown> = {};
+        if (rawText.trim().length > 0) {
+          try {
+            parsed = JSON.parse(rawText) as Record<string, unknown>;
+          } catch {
+            parsed = { error: rawText.slice(0, 500) };
+          }
+        }
+
+        if (!res.ok) {
+          const errMsg =
+            typeof parsed.error === "string"
+              ? parsed.error
+              : "Eroare la generare quiz.";
+          throw new Error(errMsg);
+        }
+
+        const maybeQuiz = parsed["quiz"];
+        if (!Array.isArray(maybeQuiz)) {
+          throw new Error("Răspuns invalid de la server.");
+        }
+
+        setPhase("processing");
+        setUploadProgress(100);
+        await new Promise((r) => setTimeout(r, 250));
+
+        const result = parsed as QuizPayload;
+        setQuiz(result.quiz);
+        setQuestionIndex(0);
+        setSelectedOption(null);
+        setFeedback(null);
+        setShowCorrect(false);
+        setScore(0);
+        setPhase("ready");
+        return;
+      }
+
+      // Fallback: multipart/form-data cu progress (pentru fișiere mici).
+      setUploadProgress(0);
       const formData = new FormData();
       formData.append("file", file);
       formData.append("regenerate", regenerate ? "1" : "0");
-      formData.append("questionCount", "5");
-      if (requirementsText.trim().length > 0) {
-        formData.append("instructions", requirementsText.trim());
+      formData.append("questionCount", String(questionCount));
+      if (instructionsTrimmed.length > 0) {
+        formData.append("instructions", instructionsTrimmed);
       }
 
       const result = await new Promise<QuizPayload & { cached?: boolean }>((resolve, reject) => {
@@ -102,19 +157,19 @@ export default function PdfQuizApp() {
               try {
                 parsed = JSON.parse(rawText) as Record<string, unknown>;
               } catch {
-                // Backend-ul ar trebui să returneze JSON, dar la unele erori Next poate trimite HTML.
-                // Afișăm textul primit ca să vezi motivul real.
                 parsed = { error: rawText.slice(0, 500) };
               }
             }
 
             if (!statusOk) {
               const errMsg =
-                typeof parsed.error === "string" ? parsed.error : "Eroare la generare quiz.";
+                typeof parsed.error === "string"
+                  ? parsed.error
+                  : "Eroare la generare quiz.";
               reject(new Error(errMsg));
               return;
             }
-            // Dacă status e ok, dar tot nu avem structura dorită, tratăm ca eroare.
+
             const maybeQuiz = parsed["quiz"];
             if (!Array.isArray(maybeQuiz)) {
               reject(new Error("Răspuns invalid de la server."));
@@ -162,14 +217,7 @@ export default function PdfQuizApp() {
     fileRef.current = file;
     setFileName(file.name);
 
-    const valid = file.size <= MAX_UPLOAD_BYTES;
-    setIsFileValid(valid);
-    if (!valid) {
-      setError("Fișier prea mare pentru Vercel. Limita este 4MB.");
-      setPhase("error");
-    } else {
-      setPhase("idle");
-    }
+    setPhase("idle");
 
     // Reset state when user picks a new file.
     setQuiz(null);
@@ -291,7 +339,9 @@ export default function PdfQuizApp() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-medium text-zinc-200">1) Încarcă un PDF</p>
-                  <p className="mt-1 text-xs text-zinc-400">Suport: max 4MB (Vercel)</p>
+                  <p className="mt-1 text-xs text-zinc-400">
+                    Suport: până la 10MB (fișiere mari: Blob)
+                  </p>
                 </div>
                 <button
                   type="button"
