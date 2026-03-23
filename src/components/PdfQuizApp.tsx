@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 import type { QuizPayload, QuizQuestion } from "@/lib/quiz/types";
 
 type UploadPhase = "idle" | "uploading" | "processing" | "ready" | "finished" | "error";
@@ -30,7 +30,14 @@ export default function PdfQuizApp() {
   const totalQuestions = quiz?.length ?? 0;
   const currentQuestion = quiz?.[questionIndex] ?? null;
 
-  const canGenerate = useMemo(() => Boolean(fileRef.current) && !busy && phase !== "uploading" && phase !== "processing", [phase, busy]);
+  // Nu folosim useMemo aici: `fileRef.current` nu declanșează rerender,
+  // dar componentele se rerandează când se schimbă `fileName` / `phase`,
+  // iar valoarea va fi citită corect din ref în timpul renderului.
+  const canGenerate =
+    Boolean(fileRef.current) &&
+    !busy &&
+    phase !== "uploading" &&
+    phase !== "processing";
 
   async function uploadPdfAndGenerateQuiz(regenerate = false) {
     const file = fileRef.current;
@@ -89,6 +96,10 @@ export default function PdfQuizApp() {
       setPhase("processing");
       setUploadProgress(100);
       await new Promise((r) => setTimeout(r, 250));
+
+      if (!Array.isArray(result.quiz) || result.quiz.length < 1) {
+        throw new Error("Răspunsul serverului este gol. Reîncearcă.");
+      }
 
       setQuiz(result.quiz);
       setQuestionIndex(0);
